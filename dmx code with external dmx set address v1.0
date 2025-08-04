@@ -1,0 +1,235 @@
+// 04 aug 2025 
+// this code is dmx working fine for controlling the rgbw led lights. P12, P11, P10, P11 made for keil ide.
+// dmx start address can be set using python code.
+
+
+// "numicro_8051.h"
+#include "n76e003_keil.h"
+#include "eeprom.h"
+#include <string.h>
+
+bit BIT_TMP;
+data uint8_t BYTE_TMP;
+#define true 1
+#define false 0
+
+#define DMX_BUFFER_SIZE 10
+#define DEVICE_ID_HIGH 0x12  // Replace with your real device ID
+#define DEVICE_ID_LOW  0x34
+
+// Global variables
+volatile uint16_t dmx_address = 1;  // Starting DMX address (stored in non-volatile memory in real implementation)
+volatile int16_t currentIndex = -1;
+volatile uint8_t DRIVER_MODE;
+volatile uint16_t received_id;
+volatile uint16_t new_addr;
+xdata uint8_t DMXbuffer[DMX_BUFFER_SIZE];
+xdata uint8_t ADDbuffer[6];
+uint8_t packet_type = false;  // 0 means dmx and 1 means start address command
+uint8_t frame_started = false;
+
+#define EEPROM_ADDR_LOW   0x3FE0
+#define EEPROM_ADDR_HIGH  0x3FE1
+
+// Declare this function as external if needed
+uint8_t READ_APROM_BYTE(uint16_t code_addr)
+{
+    uint8_t code *pcode;
+    pcode = (uint8_t code *) code_addr;
+    return *pcode;
+}
+
+void Serial_ISR(void) interrupt 4
+{
+					uint8_t id_high;
+					uint8_t id_low;
+					uint8_t addr_high;
+					uint8_t addr_low;
+    // Handle normal data reception
+    if(RI)
+    {
+        temp = SBUF;
+        clr_RI;
+    }
+
+    // Handle frame error (break condition)
+    if(FE)
+    {
+        clr_FE; // Clear frame error flag
+        // Frame error indicates start of new frame (break condition)
+        currentIndex = 0;
+        packet_type = 0; // Assume DMX initially
+        frame_started = false;
+        return;
+    }
+
+    // Process the received byte
+    if(currentIndex == 0) // First byte after break (start code)
+    {
+
+        // Check each condition separately and show results
+        if(temp == 0xBB && currentIndex == 0) // Check RDM directly
+        {
+            packet_type = 1;
+            ADDbuffer[currentIndex] = temp;
+        }
+        else if(temp == 0x00) // Check DMX directly
+        {
+            packet_type = 0;
+            frame_started = true;
+        }
+        else
+        {
+         // Don't reset, continue as DMX for testing
+            currentIndex = -1;
+            return;
+        }
+
+        currentIndex++;
+        return;
+    }
+
+    // Process subsequent bytes based on packet type
+    if(packet_type == 0  && frame_started) // DMX packet
+    {
+    	uint16_t dmx_channel = currentIndex;
+    	        // Check if this channel is within our required range (4 channels for RGBW)
+    	        if(dmx_channel >= dmx_address && dmx_channel < (dmx_address + 10))
+    	        {
+    	            uint8_t buffer_index = dmx_channel - dmx_address;
+    	            DMXbuffer[buffer_index] = temp;
+								
+    	        switch(buffer_index)
+    	                        {
+    	                            case 1: // First channel (Red)
+    	                                PWM0L = temp;
+    	                                break;
+    	                            case 2: // Second channel (Green)
+    	                                PWM1L = temp;
+    	                                break;
+    	                            case 3: // Third channel (Blue)
+    	                                PWM2L = temp;
+    	                                break;
+    	                            case 4: // Fourth channel (White)
+    	                                PWM3L = temp;
+    	                                LOAD = 1; // Load all PWM values
+    	                                 // Toggle debug LED only after all 4 channels
+    	                                break;
+    	                        }  
+    	            // Update PWM immediately when we get our channels
+									
+    	            PWM0L = DMXbuffer[0];
+    	            PWM1L = DMXbuffer[1];
+    	            PWM2L = DMXbuffer[2];
+    	            PWM3L = DMXbuffer[3];
+    	            LOAD = 1;
+
+    	   currentIndex++;
+        // Reset for next frame when we reach end
+        if(currentIndex >= 513)
+        {
+            currentIndex = -1;
+        }
+    }
+    else if(packet_type == 1) // set dmx address 
+		{
+          
+						if(currentIndex < 5)
+						{
+								ADDbuffer[currentIndex] = temp;
+								currentIndex++;
+							   
+						}
+        if(currentIndex == 5) // Got message length
+        {
+					id_high = ADDbuffer[1];
+					id_low  = ADDbuffer[2];
+					addr_high = ADDbuffer[3];
+					addr_low  = ADDbuffer[4];
+					received_id = ((uint16_t)id_high << 8) | id_low;
+          new_addr = ((uint16_t)addr_high << 8) | addr_low;
+					if(received_id == ((DEVICE_ID_HIGH << 8) | DEVICE_ID_LOW))
+					{
+							if(new_addr >= 1 && new_addr <= 509)
+							{
+									dmx_address = new_addr;
+									Write_DATAFLASH_BYTE(EEPROM_ADDR_LOW,  dmx_address & 0xFF);
+									Write_DATAFLASH_BYTE(EEPROM_ADDR_HIGH, dmx_address >> 8);
+							}
+					}
+          P14 = 0; 
+				// Reset after processing
+        packet_type = 0;
+        frame_started = false;
+        currentIndex = -1;
+        }	
+		}
+}
+
+void main(void)
+{
+    uint8_t addr_low, addr_high;
+    CKDIV = 1; // Run system at 8 MHz
+    SCON = 0x50;       //UART0 Mode1,REN=1,TI=1
+    TMOD |= 0x20;      //Timer1 Mode1
+    set_PCON_SMOD;          //UART0 Double Rate Enable
+    set_CKCON_T1M;     //Timer1 uses set system clock
+    clr_T3CON_BRCK;   //Serial port 0 baud rate clock source = Timer1
+    set_SMOD0;      //framing error flag enable
+    TH1 = 254;      // Baud rate setting for 250kbps @ 8MHz
+    TR1 = 1;        // Start Timer1
+
+    ALL_GPIO_QUASI_MODE;
+
+    // RS485 direction control pin
+    P05_PUSHPULL_MODE;
+    P05 = 0; // Set to receive mode (DE/RE pins of RS485 transceiver)
+	
+	  //test led 
+	  P14_PUSHPULL_MODE;
+	  P14 = 1;
+
+    // PWM output pins for RGBW
+    ENABLE_PWM0_CH0_P12_OUTPUT; // Red
+    ENABLE_PWM0_CH1_P11_OUTPUT; // Green
+    ENABLE_PWM0_CH2_P10_OUTPUT; // Blue
+    ENABLE_PWM0_CH3_P00_OUTPUT; // White
+
+    // PWM configuration
+    PWM0_IMDEPENDENT_MODE;
+    PWM0_CLOCK_DIV_8;
+
+    // Set PWM period (8-bit resolution)
+    PWMPH = 0x00;
+    PWMPL = 0xFF;
+
+    // Initialize all channels to minimum brightness
+    PWM0L = 0x00; // Red off
+    PWM1L = 0x00; // Green off
+    PWM2L = 0x00; // Blue off
+    PWM3L = 0x00; // White off
+
+    LOAD = true;
+    PWMRUN = true;
+
+    // UART0 configuration for DMX512 (250kbps, 8N2)
+    P06_QUASI_MODE; // TXD pin
+    P07_QUASI_MODE; // RXD pin (used for RDM responses)
+
+    ES = true;      // Enable serial interrupt
+    EA = true;      // Enable global interrupts
+    
+    Read_DATAFLASH_ARRAY(EEPROM_ADDR_LOW, &addr_low, 1);
+		Read_DATAFLASH_ARRAY(EEPROM_ADDR_HIGH, &addr_high, 1);
+
+    // Validate address range
+		dmx_address = ((uint16_t)addr_high << 8) | addr_low;
+		if (dmx_address < 1 || dmx_address > 512) {
+				dmx_address = 1;  // fallback default
+		}
+
+    while(1)
+    {
+       // PCON |= 1; // Enter idle mode to save power
+    }
+}
