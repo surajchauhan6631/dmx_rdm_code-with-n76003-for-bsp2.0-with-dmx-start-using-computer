@@ -1,0 +1,136 @@
+// this is modified version for previous code. here we have added the check device button , 
+// whenever check_device button is clicked it will blink rgb and rgbw led two times.
+
+import customtkinter as ctk
+import serial
+import serial.tools.list_ports
+import time
+
+# GUI settings
+ctk.set_appearance_mode("System")
+ctk.set_default_color_theme("blue")
+
+# Main Window
+app = ctk.CTk()
+app.geometry("420x360")
+app.title("DMX Address Config Tool")
+
+def get_ports():
+    ports = serial.tools.list_ports.comports()
+    return [port.device for port in ports]
+
+def send_config():
+    try:
+        port = port_menu.get()
+        address = int(address_entry.get())
+        color_mode = 0x03 if color_mode_menu.get() == "RGB" else 0x04
+        device_id = 0x1234
+
+        frame = bytearray()
+        frame.append(0xBB)
+        frame.append((device_id >> 8) & 0xFF)
+        frame.append(device_id & 0xFF)
+        frame.append((address >> 8) & 0xFF)
+        frame.append(address & 0xFF)
+        frame.append(color_mode)
+
+        ser = serial.Serial(port=port, baudrate=250000, bytesize=8, parity='N', stopbits=2, timeout=1)
+        ser.break_condition = True
+        time.sleep(0.001)
+        ser.break_condition = False
+        time.sleep(0.00001)
+        ser.write(frame)
+        ser.close()
+
+        status_label.configure(text=f"Sent: Addr={address}, Mode={color_mode_menu.get()}", text_color="green")
+
+        # Handle auto-increment
+        if auto_increment.get():
+            if color_mode == 0x03:
+                address += 3
+            else:
+                address += 4
+            if address <= 509:
+                address_entry.delete(0, "end")
+                address_entry.insert(0, str(address))
+
+    except Exception as e:
+        status_label.configure(text=f"Error: {e}", text_color="red")
+
+def check_device():
+    try:
+        port = port_menu.get()
+        address = int(address_entry.get())
+        color_mode = color_mode_menu.get()
+        channels = 3 if color_mode == "RGB" else 4
+
+        ser = serial.Serial(port=port, baudrate=250000, bytesize=8, parity='N', stopbits=2, timeout=1)
+
+        for _ in range(2):  # Blink twice
+            # ON frame
+            dmx_frame = bytearray(513)  # 1 start code + 512 DMX slots
+            dmx_frame[0] = 0x00  # Start code
+            for i in range(channels):
+                dmx_frame[address + i] = 255  # Full intensity
+
+            ser.break_condition = True
+            time.sleep(0.001)
+            ser.break_condition = False
+            time.sleep(0.00001)
+            ser.write(dmx_frame)
+            time.sleep(0.3)
+
+            # OFF frame
+            dmx_off_frame = bytearray(513)
+            dmx_off_frame[0] = 0x00
+            # Keep rest 0 (all LEDs off)
+
+            ser.break_condition = True
+            time.sleep(0.001)
+            ser.break_condition = False
+            time.sleep(0.00001)
+            ser.write(dmx_off_frame)
+            time.sleep(0.3)
+
+        ser.close()
+        status_label.configure(text="Check signal sent", text_color="blue")
+    except Exception as e:
+        status_label.configure(text=f"Error: {e}", text_color="red")
+
+# GUI layout
+title_label = ctk.CTkLabel(app, text="DMX Address Controller", font=ctk.CTkFont(size=18, weight="bold"))
+title_label.pack(pady=10)
+
+port_label = ctk.CTkLabel(app, text="Port")
+port_label.pack()
+port_menu = ctk.CTkOptionMenu(app, values=get_ports())
+port_menu.pack()
+
+color_mode_label = ctk.CTkLabel(app, text="Color Mode")
+color_mode_label.pack()
+color_mode_menu = ctk.CTkOptionMenu(app, values=["RGB", "RGBW"])
+color_mode_menu.pack()
+
+address_label = ctk.CTkLabel(app, text="DMX Address (1–509)")
+address_label.pack()
+
+address_frame = ctk.CTkFrame(app, fg_color="transparent")
+address_frame.pack()
+
+address_entry = ctk.CTkEntry(address_frame)
+address_entry.pack(side="left", padx=(0, 10))
+
+auto_increment = ctk.BooleanVar()
+auto_increment_checkbox = ctk.CTkCheckBox(address_frame, text="Auto Increment", variable=auto_increment)
+auto_increment_checkbox.pack(side="left")
+
+submit_btn = ctk.CTkButton(app, text="Submit", command=send_config)
+submit_btn.pack(pady=(10, 4))
+
+check_btn = ctk.CTkButton(app, text="Check Device", command=check_device)
+check_btn.pack(pady=(0, 10))
+
+status_label = ctk.CTkLabel(app, text="")
+status_label.pack()
+
+app.mainloop()
