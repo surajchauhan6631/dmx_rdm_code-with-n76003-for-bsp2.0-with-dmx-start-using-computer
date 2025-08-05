@@ -1,0 +1,102 @@
+// gui software for setting dmx address and colormode usign gui interface.
+// this is improvement of previous vertion with auto increament address setting to help programming multiple devices one after another.
+
+
+import customtkinter as ctk
+import serial
+import serial.tools.list_ports
+import time
+
+# GUI settings
+ctk.set_appearance_mode("System")
+ctk.set_default_color_theme("blue")
+
+# Main Window
+app = ctk.CTk()
+app.geometry("400x320")
+app.title("DMX Address Config Tool")
+
+def get_ports():
+    ports = serial.tools.list_ports.comports()
+    return [port.device for port in ports]
+
+def send_config():
+    try:
+        port = port_menu.get()
+        address = int(address_entry.get())
+        color_mode_text = color_mode_menu.get()
+        color_mode = 0x03 if color_mode_text == "RGB" else 0x04
+        device_id = 0x1234
+
+        # Prepare frame
+        frame = bytearray()
+        frame.append(0xBB)
+        frame.append((device_id >> 8) & 0xFF)
+        frame.append(device_id & 0xFF)
+        frame.append((address >> 8) & 0xFF)
+        frame.append(address & 0xFF)
+        frame.append(color_mode)
+
+        # Send DMX frame with break
+        ser = serial.Serial(port=port, baudrate=250000, bytesize=8, parity='N', stopbits=2, timeout=1)
+        ser.break_condition = True
+        time.sleep(0.001)
+        ser.break_condition = False
+        time.sleep(0.00001)
+        ser.write(frame)
+        ser.close()
+
+        status_label.configure(text=f"Sent: Addr={address}, Mode={color_mode_text}", text_color="green")
+
+        # Auto-increment logic
+        if auto_increment_var.get():
+            increment = 3 if color_mode_text == "RGB" else 4
+            new_address = address + increment
+            if new_address <= 509:
+                address_entry.delete(0, "end")
+                address_entry.insert(0, str(new_address))
+            else:
+                status_label.configure(text="Max DMX address reached.", text_color="orange")
+
+    except Exception as e:
+        status_label.configure(text=f"Error: {e}", text_color="red")
+
+# GUI layout
+title_label = ctk.CTkLabel(app, text="DMX Address Controller", font=ctk.CTkFont(size=18, weight="bold"))
+title_label.pack(pady=10)
+
+port_label = ctk.CTkLabel(app, text="Port")
+port_label.pack()
+port_menu = ctk.CTkOptionMenu(app, values=get_ports())
+port_menu.pack()
+
+# Color Mode (moved above DMX Address)
+color_mode_label = ctk.CTkLabel(app, text="Color Mode")
+color_mode_label.pack()
+color_mode_menu = ctk.CTkOptionMenu(app, values=["RGB", "RGBW"])
+color_mode_menu.pack(pady=(0, 10))
+
+# Address + Auto Increment
+address_frame = ctk.CTkFrame(app, fg_color="transparent")
+address_frame.pack()
+
+address_label = ctk.CTkLabel(address_frame, text="DMX Address (1–509)")
+address_label.grid(row=0, column=0, padx=(0, 10), sticky="w")
+
+auto_increment_var = ctk.BooleanVar(value=False)
+auto_increment_checkbox = ctk.CTkCheckBox(address_frame, text="Auto Increment", variable=auto_increment_var)
+auto_increment_checkbox.grid(row=0, column=1, padx=(10, 0), sticky="e")
+
+# Address entry below the label
+address_entry = ctk.CTkEntry(app)
+address_entry.pack()
+
+# Submit button
+submit_btn = ctk.CTkButton(app, text="Submit", command=send_config)
+submit_btn.pack(pady=10)
+
+# Status label
+status_label = ctk.CTkLabel(app, text="")
+status_label.pack()
+
+app.mainloop()
